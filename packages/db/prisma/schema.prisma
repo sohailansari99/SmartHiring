@@ -1,0 +1,420 @@
+// Signal Database Schema (Prisma)
+// All entities isolated by companyId where applicable.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  company_admin
+  interviewer
+  college_officer
+  student
+  platform_admin
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
+}
+
+enum StudentStatus {
+  pending
+  verified
+  suspended
+}
+
+enum TestStatus {
+  draft
+  published
+  closed
+  archived
+}
+
+enum TestType {
+  coding
+  aptitude
+  mock
+  ai_interview
+}
+
+enum Difficulty {
+  easy
+  medium
+  hard
+}
+
+enum QuestionMode {
+  stdio
+  function
+}
+
+enum AttemptStatus {
+  invited
+  started
+  submitted
+  passed
+  failed
+  advanced
+  held
+  rejected
+}
+
+enum RiskLevel {
+  Low
+  Medium
+  High
+}
+
+enum Verdict {
+  Accepted
+  Wrong_answer
+  Time_limit
+  Memory_limit
+  Runtime_error
+  Output_limit
+  Compile_error
+  Internal_error
+}
+
+model Company {
+  id                 String             @id @default(uuid())
+  name               String
+  domain             String             @unique
+  industry           String
+  contactEmail       String
+  studentsToHire     Int                @default(0)
+  verified           Boolean            @default(false)
+  verificationStatus VerificationStatus @default(pending)
+  dataTermsAgreed    Boolean            @default(true)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  members   CompanyMember[]
+  tests     Test[]
+  questions Question[]
+
+  @@map("companies")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  createdAt    DateTime @default(now())
+
+  companyMember CompanyMember?
+  collegeOfficer CollegeOfficer?
+  student       Student?
+
+  @@map("users")
+}
+
+model CompanyMember {
+  id        String   @id @default(uuid())
+  companyId String
+  userId    String   @unique
+  role      Role     @default(company_admin)
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("company_members")
+}
+
+model College {
+  id        String   @id @default(uuid())
+  name      String
+  domain    String   @unique
+  createdAt DateTime @default(now())
+
+  officers CollegeOfficer[]
+  students Student[]
+
+  @@map("colleges")
+}
+
+model CollegeOfficer {
+  id        String   @id @default(uuid())
+  collegeId String
+  userId    String   @unique
+  createdAt DateTime @default(now())
+
+  college College @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("college_officers")
+}
+
+model Student {
+  id            String        @id @default(uuid())
+  userId        String?       @unique
+  collegeId     String
+  name          String
+  batchYear     Int
+  branch        String
+  cgpa          Float
+  rollNo        String
+  collegeEmail  String        @unique
+  status        StudentStatus @default(pending)
+  registeredVia String        @default("self") // portal | self
+  createdAt     DateTime      @default(now())
+
+  user     User?     @relation(fields: [userId], references: [id])
+  college  College   @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  attempts Attempt[]
+  sessions Session[]
+
+  @@index([collegeId, batchYear, branch])
+  @@map("students")
+}
+
+model Test {
+  id                 String     @id @default(uuid())
+  companyId          String
+  name               String
+  type               TestType   @default(coding)
+  durationMinutes    Int
+  passMark           Int        @default(0)
+  openAt             DateTime
+  closeAt            DateTime
+  status             TestStatus @default(draft)
+  roundNumber        Int        @default(1)
+  requiresCamera     Boolean    @default(true)
+  requiresMicrophone Boolean    @default(true)
+  cpuLimitMs         Int        @default(5000)
+  ramLimitMb         Int        @default(256)
+  aiMonitoring       Json       @default("{}")
+  allowedLanguages   String[]   @default([])
+  createdAt          DateTime   @default(now())
+
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  audience  TestAudience?
+  questions TestQuestion[]
+  attempts  Attempt[]
+  invites   Invite[]
+
+  @@map("tests")
+}
+
+model TestAudience {
+  id         String   @id @default(uuid())
+  testId     String   @unique
+  collegeIds String[] @default([])
+  batches    Int[]    @default([])
+  branches   String[] @default([])
+  minCgpa    Float    @default(0)
+
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@map("test_audiences")
+}
+
+model Question {
+  id               String       @id @default(uuid())
+  companyId        String
+  title            String
+  difficulty       Difficulty   @default(medium)
+  topics           String[]     @default([])
+  timeLimitSeconds Int          @default(60)
+  memoryLimitMb    Int          @default(256)
+  description      String
+  inputFormat      String       @default("")
+  outputFormat     String       @default("")
+  constraints      String       @default("")
+  mode             QuestionMode @default(stdio)
+  allowedLanguages String[]     @default([])
+  starterCode      Json         @default("{}")
+  referenceSolution Json        @default("{}")
+  customChecker    String       @default("")
+  version          Int          @default(1)
+  createdAt        DateTime     @default(now())
+
+  company       Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  examples      QuestionExample[]
+  testCases     QuestionTestCase[]
+  testQuestions TestQuestion[]
+
+  @@map("questions")
+}
+
+model QuestionExample {
+  id          String   @id @default(uuid())
+  questionId  String
+  input       String
+  output      String
+  explanation String   @default("")
+  order       Int      @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("question_examples")
+}
+
+model QuestionTestCase {
+  id             String   @id @default(uuid())
+  questionId     String
+  input          String
+  expectedOutput String
+  hidden         Boolean  @default(true)
+  order          Int      @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("question_test_cases")
+}
+
+model TestQuestion {
+  id         String @id @default(uuid())
+  testId     String
+  questionId String
+  order      Int    @default(0)
+
+  test     Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, questionId])
+  @@map("test_questions")
+}
+
+model Invite {
+  id        String   @id @default(uuid())
+  testId    String
+  email     String
+  code      String   @unique
+  expiresAt DateTime
+  sentAt    DateTime @default(now())
+  openedAt  DateTime?
+  startedAt DateTime?
+
+  test Test @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@map("invites")
+}
+
+model Attempt {
+  id          String        @id @default(uuid())
+  testId      String
+  studentId   String
+  status      AttemptStatus @default(invited)
+  score       Float?
+  riskLevel   RiskLevel     @default(Low)
+  startedAt   DateTime?
+  submittedAt DateTime?
+
+  test        Test         @relation(fields: [testId], references: [id], onDelete: Cascade)
+  student     Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+  sessions    Session[]
+
+  @@unique([testId, studentId])
+  @@map("attempts")
+}
+
+model Submission {
+  id            String   @id @default(uuid())
+  attemptId     String
+  questionId    String
+  language      String
+  code          String
+  codeSizeBytes Int
+  status        String   @default("queued") // queued | running | completed | failed
+  verdict       Verdict?
+  cpuMs         Int?
+  memKb         Int?
+  createdAt     DateTime @default(now())
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@map("submissions")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  attemptId String
+  studentId String
+  testId    String
+  ip        String?
+  userAgent String?
+  device    String?
+  browser   String?
+  timezone  String?
+  startedAt DateTime @default(now())
+
+  attempt   Attempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  student   Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  events    ProctorEvent[]
+  recording Recording?
+
+  @@map("sessions")
+}
+
+model ProctorEvent {
+  id        String   @id @default(uuid())
+  sessionId String
+  type      String
+  offsetMs  Int
+  details   Json     @default("{}")
+  confidence Float   @default(1.0)
+  source    String   @default("browser")
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("proctor_events")
+}
+
+model Recording {
+  id            String   @id @default(uuid())
+  sessionId     String   @unique
+  kind          String   @default("webcam")
+  storageKey    String
+  sizeBytes     Int?
+  retentionDays Int      @default(30)
+  createdAt     DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("recordings")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String
+  actorType   String
+  actorId     String?
+  deviceId    String?
+  company     String?
+  targetTable String?
+  targetId    String?
+  summary     String
+  details     Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@map("audit_log")
+}
+
+model AiRun {
+  id            String   @id @default(uuid())
+  feature       String
+  promptVersion String
+  inputHash     String
+  output        String
+  accepted      Boolean?
+  acceptedBy    String?
+  costCents     Float?
+  createdAt     DateTime @default(now())
+
+  @@map("ai_runs")
+}

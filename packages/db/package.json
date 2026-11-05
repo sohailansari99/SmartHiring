@@ -1,0 +1,35 @@
+{
+  "name": "@signal/db",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "tsx scripts/seed.ts",
+    "test": "vitest run",
+    "contract:emit": "prisma contract emit"
+  },
+  "prisma": {
+    "engineMode": "client"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.10.1",
+    "@prisma/orm-postgres": "8.0.0-rc.22",
+    "dotenv": "^18.0.9"
+  },
+  "devDependencies": {
+    "@prisma/cli-engine": "0.9.0",
+    "@types/node": "^26.6.6",
+    "prisma": "8.0.0-rc.30"
+  }
+}
