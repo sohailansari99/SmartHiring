@@ -82,6 +82,10 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
     await prisma.student.create({ data: { userId: uStudentInel.id, collegeId: college1.id, name: 'Bad Student', batchYear: 2028, branch: 'CSE', cgpa: 5.5, rollNo: '002', collegeEmail: 'bad@tech.edu', status: 'verified', registeredVia: 'self' } });
     await prisma.student.create({ data: { userId: uStudentPending.id, collegeId: college1.id, name: 'Pending Student', batchYear: 2028, branch: 'CSE', cgpa: 8.5, rollNo: '003', collegeEmail: 'pending@tech.edu', status: 'pending', registeredVia: 'self' } });
 
+    // Student — college2
+    const uStudentOther = await prisma.user.create({ data: { email: 'other@other.edu', passwordHash: pw, name: 'Other Student', role: 'student' } });
+    await prisma.student.create({ data: { userId: uStudentOther.id, collegeId: college2.id, name: 'Other Student', batchYear: 2028, branch: 'CSE', cgpa: 8.5, rollNo: '004', collegeEmail: 'other@other.edu', status: 'pending', registeredVia: 'self' } });
+
     // Test from company1 (college1 is in audience)
     await prisma.test.create({
       data: {

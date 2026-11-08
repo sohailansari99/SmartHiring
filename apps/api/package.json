@@ -16,6 +16,7 @@
     "@prisma/client": "5.22.0",
     "@signal/shared": "workspace:*",
     "argon2": "^0.40.0",
+    "dotenv": "^18.0.9",
     "fastify": "^4.26.0",
     "zod": "^3.22.4"
   },
