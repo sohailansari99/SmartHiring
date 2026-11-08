@@ -5,3 +5,5 @@ node_modules
 .prisma
 .vitest
 coverage
+*_jar*.txt
+*.cookies
