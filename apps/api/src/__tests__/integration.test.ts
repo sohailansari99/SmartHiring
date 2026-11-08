@@ -11,7 +11,8 @@ import argon2 from 'argon2';
 import { createApp } from '../server.js';
 
 // ─── Try to connect; skip entire suite if DB is unreachable ──────────────────
-const prisma = new PrismaClient();
+const testDbUrl = process.env.DATABASE_URL_TEST || 'postgresql://signal:password@127.0.0.1:5433/signal_test';
+const prisma = new PrismaClient({ datasources: { db: { url: testDbUrl } } });
 const app = createApp(prisma);
 
 async function canConnect(): Promise<boolean> {
@@ -28,9 +29,8 @@ const dbAvailable = await canConnect();
 
 if (!dbAvailable) {
   console.warn(
-    '[INTEGRATION] SKIP — DATABASE_URL is not reachable. ' +
-    'Set a valid PostgreSQL connection string in apps/api/.env and run ' +
-    '`npx prisma migrate dev --name init` before executing this suite.'
+    '[INTEGRATION] SKIP — DATABASE_URL_TEST is not reachable. ' +
+    'Set a valid PostgreSQL connection string in apps/api/.env or via DATABASE_URL_TEST environment variable.'
   );
 }
 

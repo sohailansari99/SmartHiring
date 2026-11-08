@@ -99,6 +99,7 @@ model Company {
   members   CompanyMember[]
   tests     Test[]
   questions Question[]
+  tokens    CompanyVerificationToken[]
 
   @@map("companies")
 }
@@ -403,6 +404,19 @@ model AuditLog {
   createdAt   DateTime @default(now())
 
   @@map("audit_log")
+}
+
+model CompanyVerificationToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  companyId String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("company_verification_tokens")
 }
 
 model AiRun {

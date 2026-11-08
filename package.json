@@ -5,8 +5,7 @@
   "packageManager": "pnpm@9.15.0",
   "workspaces": [
     "packages/*",
-    "apps/*",
-    "services/*"
+    "apps/*"
   ],
   "scripts": {
     "dev": "pnpm --filter api dev",

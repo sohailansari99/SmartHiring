@@ -30,7 +30,7 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
   const app = Fastify({ logger: true });
 
   app.register(cors, { origin: true, credentials: true });
-  app.register(cookie);
+  app.register(cookie, { hook: false, parseOptions: {} });
   app.register(jwt, { secret: jwtSecret, cookie: { cookieName: 'token', signed: false } });
 
   // ── Auth routes ────────────────────────────────────────────────────────────
@@ -164,11 +164,12 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
 
     const token = app.jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name });
 
-    // Set httpOnly cookie
+    // Set httpOnly cookie (path=/ ensures it's sent for all routes)
     reply.setCookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
+      path: '/',
       maxAge: 60 * 60 * 1000, // 1 hour
     });
 
@@ -293,6 +294,41 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     return reply.send({ success: true });
   });
 
+  // ── Question routes ────────────────────────────────────────────────────────
+
+  // Create question (company_admin only)
+  app.post('/api/questions', {
+    preHandler: [authMiddleware, roleGuard(['company_admin'])],
+  }, async (req, reply) => {
+    const user = req.user as any;
+    const member = await prisma.companyMember.findUnique({ where: { userId: user.id }, include: { company: true } });
+    if (!member) return reply.status(404).send({ error: 'Company member not found' });
+
+    const { title, difficulty, topics, timeLimitSeconds, memoryLimitMb, description, inputFormat, outputFormat, constraints, mode, allowedLanguages, starterCode, referenceSolution, customChecker } = req.body as any;
+    if (!title || !description) return reply.status(400).send({ error: 'Missing required fields' });
+
+    const question = await prisma.question.create({
+      data: {
+        companyId: member.companyId,
+        title,
+        difficulty: difficulty || 'medium',
+        topics: topics || [],
+        timeLimitSeconds: timeLimitSeconds || 60,
+        memoryLimitMb: memoryLimitMb || 256,
+        description,
+        inputFormat: inputFormat || '',
+        outputFormat: outputFormat || '',
+        constraints: constraints || '',
+        mode: (mode as any) || 'stdio',
+        allowedLanguages: allowedLanguages || [],
+        starterCode: starterCode || {},
+        referenceSolution: referenceSolution || {},
+        customChecker: customChecker || '',
+      },
+    });
+    return reply.send(question);
+  });
+
   // ── Test routes ─────────────────────────────────────────────────────────────
 
   // List tests (only eligible ones for signed-in student)
@@ -400,3 +436,14 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
 // Default app for unit tests (singletons are fine there since Prisma is mocked)
 const prisma = new PrismaClient();
 export const app = createApp(prisma);
+
+// Start listening when run directly (not imported by tests)
+const isDirectRun = process.argv[1] && (
+  import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').replace(/^.*apps\/api\//, '')) ||
+  require('path').basename(process.argv[1]) === 'server.ts'
+);
+if (isDirectRun) {
+  const port = parseInt(process.env.PORT || '3001', 10);
+  await app.listen({ host: '0.0.0.0', port });
+  console.log(`API listening on http://localhost:${port}`);
+}
