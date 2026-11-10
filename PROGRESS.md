@@ -86,10 +86,21 @@ Duration:   3.30s
 All integration tests run against real Postgres (no skips).
 
 ## Evidence Log
-### 2026-11-08 (Phase 1 Completion)
-- PostgreSQL container running on port 5433 with trust auth
-- 21 tables created via Prisma migration
-- Seed script populated: 1 company (Acme Corp), 1 college (Tech Institute), 5 users
-- All 28 tests pass against real database
-- JWT_SECRET enforced (min 32 chars)
-- Missing docs noted: SECURITY.md, ARCHITECTURE.md are minimal stubs in packages/shared/docs/
+### 2026-11-10 (Session Update & Fixes)
+- Fixed login cookie settings in `apps/api/src/server.ts` using `@fastify/cookie` default parseOptions (`path: '/'`, `httpOnly: true`, `sameSite: 'lax'`).
+- Bound API server to `127.0.0.1` by default using `process.env.HOST` in `apps/api/src/server.ts`.
+- Restricted CORS to `process.env.WEB_ORIGIN || 'http://localhost:5173'` in `apps/api/src/server.ts`.
+- Verified integration test suite uses a separate database via `DATABASE_URL_TEST` (`postgresql://signal:password@127.0.0.1:5433/signal_test`).
+- Removed unused screen components: `AdminScreen.tsx`, `CandidateScreen.tsx`, and `Shells.tsx` from `apps/web/src/`.
+
+### Verified Test Run (This Session)
+```
+$ pnpm test
+packages/shared test: 12 passed
+packages/db test: 1 passed
+apps/web test: 2 passed
+apps/api test: 28 passed
+
+Test Files  3 passed (3)
+     Tests  28 passed (28)
+```
