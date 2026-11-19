@@ -449,3 +449,18 @@ model AiRun {
 
   @@map("ai_runs")
 }
+
+model SimilarityResult {
+  id        String   @id @default(uuid())
+  submissionIdA String
+  submissionIdB String
+  questionId  String
+  companyId   String
+  jaccard     Float
+  reading     String // Distinct | Some overlap | Review closely
+  createdAt   DateTime @default(now())
+
+  @@index([questionId])
+  @@index([companyId])
+  @@map("similarity_results")
+}

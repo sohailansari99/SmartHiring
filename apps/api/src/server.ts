@@ -7,7 +7,7 @@ import jwt from '@fastify/jwt';
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { authMiddleware, roleGuard } from './auth.js';
-import { checkEligibility } from '@signal/shared';
+import { checkEligibility, normalizeCode, shingles, jaccardSimilarity } from '@signal/shared';
 import { mockExecute } from './execution.js';
 
 // Load env vars from .env (needed for tests that don't set them)
@@ -609,6 +609,43 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     });
 
     return reply.status(201).send(event);
+  });
+
+  // ── Similarity check (company_admin only) ────────────────────────────────
+  app.post('/api/similarity', { preHandler: [authMiddleware, roleGuard(['company_admin'])] }, async (req, reply) => {
+    const user = req.user as any;
+    const member = await prisma.companyMember.findUnique({ where: { userId: user.id }, include: { company: true } });
+    if (!member) return reply.status(404).send({ error: 'Company member not found' });
+
+    const { submissionIdA, submissionIdB } = req.body as any;
+    if (!submissionIdA || !submissionIdB) return reply.status(400).send({ error: 'Missing submission IDs' });
+
+    const subA = await prisma.submission.findUnique({ where: { id: submissionIdA }, include: { attempt: { include: { test: true } } } });
+    const subB = await prisma.submission.findUnique({ where: { id: submissionIdB }, include: { attempt: { include: { test: true } } } });
+    if (!subA || !subB) return reply.status(404).send({ error: 'Submission not found' });
+    if (subA.attempt.test.companyId !== member.companyId || subB.attempt.test.companyId !== member.companyId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const result = jaccardSimilarity(subA.code, subB.code);
+
+    // Store similarity result
+    const stored = await prisma.similarityResult.create({
+      data: {
+        submissionIdA: subA.id,
+        submissionIdB: subB.id,
+        questionId: subA.questionId,
+        companyId: member.companyId,
+        jaccard: result.jaccard,
+        reading: result.reading,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: { action: 'similarity.reviewed', actorType: user.role, actorId: user.id, targetTable: 'similarity_results', targetId: stored.id, summary: `Similarity checked between ${subA.id} and ${subB.id}: ${result.reading}` },
+    });
+
+    return reply.send(result);
   });
 
   return app;
