@@ -552,6 +552,65 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     return reply.send(college);
   });
 
+  // ── Consent routes (Phase 4) ───────────────────────────────────────────────
+
+  // Grant consent for a test (student only)
+  app.post('/api/consents', { preHandler: [authMiddleware, roleGuard(['student'])] }, async (req, reply) => {
+    const user = req.user as any;
+    const { testId, version, recorded } = req.body as any;
+    if (!testId || !version || !recorded || !Array.isArray(recorded)) {
+      return reply.status(400).send({ error: 'Missing required fields' });
+    }
+
+    const student = await prisma.student.findUnique({ where: { userId: user.id } });
+    if (!student) return reply.status(404).send({ error: 'Student not found' });
+
+    // Check existing consent
+    const existing = await prisma.consent.findUnique({ where: { studentId_testId: { studentId: student.id, testId } } });
+    if (existing) return reply.status(409).send({ error: 'Consent already exists for this test' });
+
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    const consent = await prisma.consent.create({
+      data: { studentId: student.id, testId, version, recorded, expiresAt },
+    });
+
+    await prisma.auditLog.create({
+      data: { action: 'consent.granted', actorType: user.role, actorId: user.id, targetTable: 'consents', targetId: consent.id, summary: `Consent granted for test ${testId}` },
+    });
+
+    return reply.status(201).send(consent);
+  });
+
+  // ── Proctoring routes (Phase 4) ────────────────────────────────────────────
+
+  // Submit proctor event (student)
+  app.post('/api/sessions/:sessionId/proctor-events', { preHandler: [authMiddleware, roleGuard(['student'])] }, async (req, reply) => {
+    const user = req.user as any;
+    const { type, offsetMs, details, source } = req.body as any;
+    if (!type || offsetMs === undefined || !source) {
+      return reply.status(400).send({ error: 'Missing required fields' });
+    }
+
+    const session = await prisma.session.findUnique({ where: { id: req.params.sessionId as string } });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+
+    const student = await prisma.student.findUnique({ where: { userId: user.id } });
+    if (!student || student.id !== session.studentId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    const event = await prisma.proctorEvent.create({
+      data: { sessionId: session.id, type, offsetMs, details: details ?? {}, source: source ?? 'browser' },
+    });
+
+    await prisma.auditLog.create({
+      data: { action: 'proctor.event.received', actorType: user.role, actorId: user.id, targetTable: 'proctor_events', targetId: event.id, summary: `Proctor event ${type} recorded for session ${session.id}` },
+    });
+
+    return reply.status(201).send(event);
+  });
+
   return app;
 }
 

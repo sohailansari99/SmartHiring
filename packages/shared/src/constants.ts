@@ -133,6 +133,9 @@ export const AUDIT_ACTIONS = {
   INVITE_SENT: 'invite.sent',
   AI_SUGGESTION_ACCEPTED: 'ai.suggestion.accepted',
   AI_SUGGESTION_REJECTED: 'ai.suggestion.rejected',
+  CONSENT_GRANTED: 'consent.granted',
+  PROCTOR_EVENT_RECEIVED: 'proctor.event.received',
+  RISK_LEVEL_UPDATED: 'risk.level.updated',
 } as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
 

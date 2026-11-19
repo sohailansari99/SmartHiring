@@ -407,6 +407,22 @@ model AuditLog {
   @@map("audit_log")
 }
 
+model Consent {
+  id        String   @id @default(uuid())
+  studentId String
+  testId    String
+  version   Int
+  recorded  String[] // list of what was consented to
+  grantedAt DateTime @default(now())
+  expiresAt DateTime
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  test    Test    @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, testId])
+  @@map("consents")
+}
+
 model CompanyVerificationToken {
   id        String   @id @default(uuid())
   token     String   @unique
