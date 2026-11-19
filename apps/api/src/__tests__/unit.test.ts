@@ -5,12 +5,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ─── Mock @prisma/client ─────────────────────────────────────────────────────
-const mockedState = vi.hoisted(() => ({ store: {} as Record<string, any> }));
+const mockedState = vi.hoisted(() => {
+  process.env.DATABASE_URL = 'postgresql://u:p@localhost/db';
+  process.env.DATABASE_URL_TEST = 'postgresql://u:p@localhost/db_test';
+  process.env.JWT_SECRET = 'a'.repeat(32);
+  return { store: {} as Record<string, any> };
+});
 
 vi.mock('@prisma/client', () => {
   const { store } = mockedState;
-  const mockFn = vi.fn(() => store);
-  return { PrismaClient: mockFn };
+  // eslint-disable-next-line func-style
+  const MockPrismaClient = function () { return store; };
+  return { PrismaClient: MockPrismaClient };
 });
 
 vi.mock('argon2', () => ({
@@ -33,15 +39,17 @@ function getPrisma() {
 }
 
 function seedMocks() {
-  mockedState.store.company = { create: vi.fn() };
+  mockedState.store.company = { create: vi.fn(), findUnique: vi.fn() };
   mockedState.store.user = { create: vi.fn(), findUnique: vi.fn() };
   mockedState.store.student = { findUnique: vi.fn(), update: vi.fn(), createMany: vi.fn() };
   mockedState.store.college = { create: vi.fn(), findUnique: vi.fn() };
   mockedState.store.collegeOfficer = { findUnique: vi.fn() };
-  mockedState.store.test = { findUnique: vi.fn() };
+  mockedState.store.test = { findUnique: vi.fn(), findMany: vi.fn() };
   mockedState.store.auditLog = { create: vi.fn() };
   mockedState.store.attempt = { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() };
   mockedState.store.submission = { create: vi.fn(), findMany: vi.fn() };
+  mockedState.store.companyVerificationToken = { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() };
+  mockedState.store.companyMember = { findUnique: vi.fn() };
 }
 
 const baseTest = {
@@ -59,6 +67,8 @@ describe('[UNIT] API Access Rules — mocked Prisma, no DB required', () => {
     vi.clearAllMocks();
     Object.keys(mockedState.store).forEach((k) => delete mockedState.store[k]);
     seedMocks();
+    process.env.DATABASE_URL = 'postgresql://test:pass@localhost/db';
+    process.env.DATABASE_URL_TEST = 'postgresql://test:pass@localhost/db_test';
   });
 
   // ── 1. Anonymous → 401 ─────────────────────────────────────────────────────
@@ -184,6 +194,37 @@ describe('[UNIT] API Access Rules — mocked Prisma, no DB required', () => {
       const token = createToken({ id: 'u11', email: 'admin2@other.com', role: 'company_admin', name: 'OtherAdmin' });
       const res = await injectWithToken(token, 'GET', '/api/tests/t2');
       expect(res.statusCode).toBe(404);
+    });
+  });
+
+  // ── 7. Company registration & verification ─────────────────────────────────
+  describe('Company registration & verification', () => {
+    it('register-company returns token only when flag is set', async () => {
+      getPrisma().company.findUnique.mockResolvedValue(null);
+      getPrisma().company.create.mockResolvedValue({ id: 'c1', name: 'Test Co', domain: 'test.com', verified: false, verificationStatus: 'pending' });
+      getPrisma().companyVerificationToken.create.mockResolvedValue({ id: 'v1' });
+      getPrisma().user.create.mockResolvedValue({ id: 'u1' });
+
+      // Flag false
+      process.env.DEV_RETURN_VERIFICATION_TOKEN = 'false';
+      const res1 = await app.inject({
+        method: 'POST',
+        url: '/api/auth/register-company',
+        payload: { name: 'Test Co', domain: 'test.com', contactEmail: 'admin@test.com', password: 'password' },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(JSON.parse(res1.body).token).toBeUndefined();
+
+      // Flag true
+      process.env.DEV_RETURN_VERIFICATION_TOKEN = 'true';
+      process.env.NODE_ENV = 'development';
+      const res2 = await app.inject({
+        method: 'POST',
+        url: '/api/auth/register-company',
+        payload: { name: 'Test Co', domain: 'test.com', contactEmail: 'admin@test.com', password: 'password' },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(JSON.parse(res2.body).token).toBeDefined();
     });
   });
 });

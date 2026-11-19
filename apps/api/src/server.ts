@@ -8,12 +8,36 @@ import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { authMiddleware, roleGuard } from './auth.js';
 import { checkEligibility } from '@signal/shared';
+import { mockExecute } from './execution.js';
 
 // Load env vars from .env (needed for tests that don't set them)
 try {
   await import('dotenv/config');
 } catch {}
 
+// Validate Database URLs
+const dbUrl = process.env.DATABASE_URL;
+const dbUrlTest = process.env.DATABASE_URL_TEST;
+
+// Remote database guard: reject non-local hosts unless ALLOW_REMOTE_DB=true
+if (dbUrl && dbUrl.includes('supabase.com') && !process.env.ALLOW_REMOTE_DB) {
+  console.error('FATAL: Remote Supabase database not allowed. Set ALLOW_REMOTE_DB=true to override.');
+  process.exit(1);
+}
+if (dbUrl && !dbUrl.includes('127.0.0.1') && !dbUrl.includes('localhost') && !process.env.ALLOW_REMOTE_DB) {
+  console.error('FATAL: Non-local database not allowed. Set ALLOW_REMOTE_DB=true to override.');
+  process.exit(1);
+}
+
+if (!dbUrl || !dbUrlTest || dbUrl === dbUrlTest) {
+  console.error('FATAL: DATABASE_URL and DATABASE_URL_TEST must be set and different');
+  process.exit(1);
+}
+
+if (process.env.DEV_RETURN_VERIFICATION_TOKEN === 'true' && process.env.NODE_ENV === 'production') {
+  console.error('FATAL: DEV_RETURN_VERIFICATION_TOKEN cannot be true in production');
+  process.exit(1);
+}
 
 // Validate JWT_SECRET once per process import (tests that don't set it will get a clear error)
 const jwtSecret = process.env.JWT_SECRET;
@@ -29,9 +53,9 @@ if (!jwtSecret || jwtSecret.length < 32) {
 export function createApp(prisma: PrismaClient): FastifyInstance {
   const app = Fastify({ logger: true });
 
-  app.register(cors, { origin: true, credentials: true });
-  app.register(cookie, { hook: false, parseOptions: {} });
-  app.register(jwt, { secret: jwtSecret, cookie: { cookieName: 'token', signed: false } });
+  app.register(cors, { origin: process.env.WEB_ORIGIN || 'http://localhost:5173', credentials: true });
+  app.register(cookie);
+  app.register(jwt, { secret: jwtSecret, sign: { expiresIn: '1h' }, cookie: { cookieName: 'token', signed: false } });
 
   // ── Auth routes ────────────────────────────────────────────────────────────
 
@@ -88,9 +112,14 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     });
 
     // Print link to console for dev
-    console.log(`[Verification] Visit: http://localhost:3001/api/verify?token=${tokenStr}`);
+    console.log(`[Verification] Visit: http://localhost:3001/api/auth/verify-company?token=${tokenStr}`);
 
-    return reply.send({ id: company.id, name: company.name, verified: company.verified, verificationStatus: company.verificationStatus });
+    const response: any = { id: company.id, name: company.name, verified: company.verified, verificationStatus: company.verificationStatus };
+    if (process.env.DEV_RETURN_VERIFICATION_TOKEN === 'true') {
+      response.token = tokenStr;
+    }
+
+    return reply.send(response);
   });
 
   // Verify company by token
@@ -166,11 +195,11 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
 
     // Set httpOnly cookie (path=/ ensures it's sent for all routes)
     reply.setCookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 60 * 1000, // 1 hour
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 3600, // 1 hour in seconds
     });
 
     return reply.send({
@@ -300,11 +329,12 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
   app.post('/api/questions', {
     preHandler: [authMiddleware, roleGuard(['company_admin'])],
   }, async (req, reply) => {
+    // ... (existing code for /api/questions)
     const user = req.user as any;
     const member = await prisma.companyMember.findUnique({ where: { userId: user.id }, include: { company: true } });
     if (!member) return reply.status(404).send({ error: 'Company member not found' });
 
-    const { title, difficulty, topics, timeLimitSeconds, memoryLimitMb, description, inputFormat, outputFormat, constraints, mode, allowedLanguages, starterCode, referenceSolution, customChecker } = req.body as any;
+    const { title, difficulty, topics, timeLimitSeconds, memoryLimitMb, description, inputFormat, outputFormat, constraints, mode, allowedLanguages, starterCode, referenceSolution, customChecker, examples, testCases } = req.body as any;
     if (!title || !description) return reply.status(400).send({ error: 'Missing required fields' });
 
     const question = await prisma.question.create({
@@ -324,10 +354,87 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
         starterCode: starterCode || {},
         referenceSolution: referenceSolution || {},
         customChecker: customChecker || '',
+        examples: { create: examples },
+        testCases: { create: testCases },
       },
+      include: { examples: true, testCases: true },
     });
     return reply.send(question);
   });
+
+  // ── Submission routes ───────────────────────────────────────────────────────
+
+  // Submit code (student only)
+  app.post('/api/submissions', {
+    preHandler: [authMiddleware, roleGuard(['student'])],
+  }, async (req, reply) => {
+    const user = req.user as any;
+    const { code, language, questionId, testId, idempotencyKey } = req.body as any;
+
+    const student = await prisma.student.findUnique({ where: { userId: user.id } });
+    if (!student) return reply.status(404).send({ error: 'Student not found' });
+
+    // Validate test eligibility
+    const test = await prisma.test.findUnique({ where: { id: testId }, include: { audience: true, questions: { include: { question: true } } } });
+    if (!test || !checkEligibility(student, { ...test, audience: test.audience as any }).allowed) {
+      return reply.status(404).send({ error: 'Test not available' });
+    }
+
+    // Verify question is part of test
+    const testQuestion = test.questions.find((tq) => tq.questionId === questionId);
+    if (!testQuestion) return reply.status(404).send({ error: 'Question not in test' });
+
+    // Create or get existing attempt
+    let attempt = await prisma.attempt.findUnique({
+      where: { testId_studentId: { testId, studentId: student.id } },
+    });
+    if (!attempt) {
+      attempt = await prisma.attempt.create({
+        data: { testId, studentId: student.id, status: 'started' },
+      });
+    }
+
+    // Create submission (mocked engine)
+    const question = await prisma.question.findUnique({ where: { id: questionId }, include: { testCases: true } });
+    const cases = question?.testCases || [];
+
+    // Mock run
+    const results = mockExecute(code, cases.map(c => c.input), language, question?.timeLimitSeconds || 60, question?.memoryLimitMb || 256);
+
+    const submission = await prisma.submission.create({
+      data: {
+        attemptId: attempt.id,
+        questionId,
+        language,
+        code,
+        codeSizeBytes: Buffer.byteLength(code),
+        status: 'completed',
+        verdict: results.every(r => r.verdict === 'Accepted') ? 'Accepted' : 'Wrong answer',
+        cpuMs: results.reduce((acc, r) => acc + r.cpuMs, 0),
+        memKb: Math.max(...results.map(r => r.memKb)),
+      },
+    });
+
+    return reply.status(202).send({ id: submission.id, status: submission.status, verdict: submission.verdict });
+  });
+
+  // Get Attempt (includes submissions)
+  app.get('/api/attempts/:attemptId', { preHandler: [authMiddleware] }, async (req, reply) => {
+    const user = req.user as any;
+    const attempt = await prisma.attempt.findUnique({
+      where: { id: req.params.attemptId as string },
+      include: { submissions: true }
+    });
+    if (!attempt) return reply.status(404).send({ error: 'Attempt not found' });
+
+    // Only student or staff can view
+    const student = await prisma.student.findUnique({ where: { userId: user.id } });
+    if (student?.id !== attempt.studentId && user.role !== 'company_admin') {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+    return reply.send(attempt);
+  });
+
 
   // ── Test routes ─────────────────────────────────────────────────────────────
 
@@ -430,6 +537,21 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     return reply.send({ id: student.id, userId: student.userId, collegeId: student.collegeId, status: student.status, name: student.name, batchYear: student.batchYear, branch: student.branch, cgpa: student.cgpa });
   });
 
+  // Create college (company_admin only, for demo purposes)
+  app.post('/api/colleges', {
+    preHandler: [authMiddleware, roleGuard(['company_admin'])],
+  }, async (req, reply) => {
+    const user = req.user as any;
+    const member = await prisma.companyMember.findUnique({ where: { userId: user.id }, include: { company: true } });
+    if (!member) return reply.status(404).send({ error: 'Company member not found' });
+
+    const { name, domain } = req.body as any;
+    if (!name || !domain) return reply.status(400).send({ error: 'Missing required fields' });
+
+    const college = await prisma.college.create({ data: { name, domain } });
+    return reply.send(college);
+  });
+
   return app;
 }
 
@@ -442,8 +564,10 @@ const isDirectRun = process.argv[1] && (
   import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').replace(/^.*apps\/api\//, '')) ||
   require('path').basename(process.argv[1]) === 'server.ts'
 );
+
 if (isDirectRun) {
+  const host = process.env.HOST || '127.0.0.1';
   const port = parseInt(process.env.PORT || '3001', 10);
-  await app.listen({ host: '0.0.0.0', port });
-  console.log(`API listening on http://localhost:${port}`);
+  await app.listen({ host, port });
+  console.log(`API listening on http://${host}:${port}`);
 }
