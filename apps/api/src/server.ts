@@ -394,6 +394,14 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
       });
     }
 
+    // Idempotency check — return existing submission if key was already used
+    const existing = await prisma.submission.findUnique({
+      where: { id: `idemp_${testId}_${questionId}_${idempotencyKey}` },
+    });
+    if (existing) {
+      return reply.status(200).send({ id: existing.id, status: existing.status, verdict: existing.verdict });
+    }
+
     // Create submission (mocked engine)
     const question = await prisma.question.findUnique({ where: { id: questionId }, include: { testCases: true } });
     const cases = question?.testCases || [];
@@ -401,15 +409,20 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     // Mock run
     const results = mockExecute(code, cases.map(c => c.input), language, question?.timeLimitSeconds || 60, question?.memoryLimitMb || 256);
 
+    // Pick worst verdict across all cases
+    const verdictOrder = ['Runtime_error', 'Compile_error', 'Time_limit', 'Memory_limit', 'Output_limit', 'Wrong_answer', 'Accepted'];
+    const verdict = results.reduce((worst, r) => verdictOrder.indexOf(r.verdict!) < verdictOrder.indexOf(worst) ? r.verdict! : worst, 'Accepted' as string);
+
     const submission = await prisma.submission.create({
       data: {
+        id: `idemp_${testId}_${questionId}_${idempotencyKey}`,
         attemptId: attempt.id,
         questionId,
         language,
         code,
         codeSizeBytes: Buffer.byteLength(code),
         status: 'completed',
-        verdict: results.every(r => r.verdict === 'Accepted') ? 'Accepted' : 'Wrong answer',
+        verdict,
         cpuMs: results.reduce((acc, r) => acc + r.cpuMs, 0),
         memKb: Math.max(...results.map(r => r.memKb)),
       },
@@ -625,6 +638,9 @@ export function createApp(prisma: PrismaClient): FastifyInstance {
     if (!subA || !subB) return reply.status(404).send({ error: 'Submission not found' });
     if (subA.attempt.test.companyId !== member.companyId || subB.attempt.test.companyId !== member.companyId) {
       return reply.status(403).send({ error: 'Forbidden' });
+    }
+    if (subA.questionId !== subB.questionId) {
+      return reply.status(400).send({ error: 'Submissions must be for the same question' });
     }
 
     const result = jaccardSimilarity(subA.code, subB.code);

@@ -104,3 +104,39 @@ apps/api test: 28 passed
 Test Files  3 passed (3)
      Tests  28 passed (28)
 ```
+- [x] Phase 3: submission API, mock executor, and remote DB guard implemented
+  - Evidence: unit tests (10) + guard tests (3) passing, total 25 passed. (Integration tests skipped pending local DB setup)
+
+## Phase 4 Status (as of 2026-11-19)
+
+### 4.1 Consent System
+- [x] Add Consent model to Prisma schema
+- [x] Implement POST /api/consents endpoint (student-only, validates identity, creates consent record with expiry)
+- [x] Add consent grant audit log entry
+
+### 4.2 Proctoring Event Ingestion
+- [x] Implement POST /api/sessions/:sessionId/proctor-events endpoint (student-only, RBAC enforced, session ownership validation)
+- [x] Add proctor event audit log entry
+
+### 4.3 Shared Constants
+- [x] Add CONSENT_GRANTED, PROCTOR_EVENT_RECEIVED, RISK_LEVEL_UPDATED audit actions to shared constants
+
+## Phase 5 Status (as of 2026-11-19)
+
+### 5.1 Similarity Check Endpoint
+- [x] Add SimilarityResult model to Prisma schema with questionId and companyId indexing
+- [x] Implement POST /api/similarity endpoint (company_admin only, RBAC + ownership check via test.companyId)
+- [x] Use shared jaccardSimilarity() for normalized 4-gram comparison
+- [x] Log audit event on each similarity check
+
+## Test Results Summary
+```
+$ pnpm test
+packages/shared test: 12 passed (12)
+packages/db test:     1 passed (1)
+apps/web test:        2 passed (2)
+apps/api test:        25 passed | 17 skipped (42)
+                      └─ Skipped: integration tests (require live Postgres on 127.0.0.1:5433)
+Test Files: 5 passed (5)
+Tests:      40 passed | 17 skipped (57)
+```

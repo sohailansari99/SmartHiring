@@ -91,19 +91,27 @@ export function mockExecute(
       !codeLower.includes('error') && !codeLower.includes('exception');
 
     if (hasCorrectLogic) {
+      // Deterministic pseudo-random based on input + code length so identical inputs always produce same result
+      const seed = (code.length + input.length * 31) % 100;
+      const cpuMs = seed % 40 + 10;
+      const memKb = seed % 80 + 512;
       results.push({
         verdict: VERDICT.ACCEPTED,
         stdout: inputTrimmed, // Echo input as output for simple stdio problems
-        cpuMs: Math.floor(Math.random() * effectiveTimeoutMs * 0.3) + 10,
-        memKb: Math.floor(Math.random() * effectiveMemKb * 0.2) + 1024,
+        cpuMs,
+        memKb,
       });
     } else {
-      // Wrong answer or edge case failure
+      const seed = (code.length + input.length * 31 + 50) % 100;
+      const cpuMs = seed % 60 + 5;
+      const memKb = seed % 120 + 256;
+      // Simulate some non-accepted cases hitting limits
+      const finalVerdict = seed > 70 ? VERDICT.TIME_LIMIT : VERDICT.WRONG_ANSWER;
       results.push({
-        verdict: VERDICT.WRONG_ANSWER,
+        verdict: finalVerdict,
         stdout: '',
-        cpuMs: Math.floor(Math.random() * effectiveTimeoutMs * 0.5) + 5,
-        memKb: Math.floor(Math.random() * effectiveMemKb * 0.3) + 512,
+        cpuMs,
+        memKb,
       });
     }
   }

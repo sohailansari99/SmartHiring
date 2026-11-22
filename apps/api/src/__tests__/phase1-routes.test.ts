@@ -1,37 +1,27 @@
 // Integration tests for new Phase 1 routes — against real Postgres.
+// Requires DATABASE_URL_TEST to point to a reachable PostgreSQL instance on localhost.
+// Fail fast if missing or unreachable — do not silently skip.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { createApp } from '../server.js';
 
-const testDbUrl = process.env.DATABASE_URL_TEST || 'postgresql://signal:password@127.0.0.1:5433/signal_test';
-const prisma = new PrismaClient({ datasources: { db: { url: testDbUrl } } });
+const rawUrl = process.env.DATABASE_URL_TEST;
+if (!rawUrl) throw new Error('[INTEGRATION] DATABASE_URL_TEST environment variable is required');
+if (!rawUrl.includes('127.0.0.1') && !rawUrl.includes('localhost')) throw new Error('[INTEGRATION] DATABASE_URL_TEST must point to a local PostgreSQL instance');
+
+const prisma = new PrismaClient({ datasources: { db: { url: rawUrl } } });
 const app = createApp(prisma);
 
-async function canConnect(): Promise<boolean> {
-  try {
-    await prisma.$connect();
-    await prisma.$disconnect();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const dbAvailable = await canConnect();
-
-if (!dbAvailable) {
-  console.warn(
-    '[INTEGRATION] SKIP — DATABASE_URL_TEST is not reachable. ' +
-    'Set a valid PostgreSQL connection string and run `pnpm prisma migrate dev`.'
-  );
+try {
+  await prisma.$connect();
+} catch (err) {
+  console.error('[INTEGRATION] DATABASE_URL_TEST is reachable but cannot connect:', err);
+  process.exit(1);
 }
 
 describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
-  const skipIfNoDb = (name: string, fn: (...args: any[]) => any, timeout?: number) =>
-    dbAvailable ? it(name, fn, timeout) : it.skip(name, fn, timeout);
-
   async function seed() {
     await prisma.auditLog.deleteMany();
     await prisma.companyVerificationToken.deleteMany();
@@ -127,16 +117,14 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
   }
 
   beforeAll(async () => {
-    if (!dbAvailable) return;
     await seed();
   });
 
   afterAll(async () => {
-    if (!dbAvailable) return;
     await prisma.$disconnect();
   });
 
-  skipIfNoDb('register-company creates company and verification token', async () => {
+  it('register-company creates company and verification token', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/register-company',
@@ -151,7 +139,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(body.verified).toBe(false);
   });
 
-  skipIfNoDb('login returns user info with httpOnly cookie', async () => {
+  it('login returns user info with httpOnly cookie', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
@@ -163,7 +151,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(res.cookies.length).toBeGreaterThan(0);
   });
 
-  skipIfNoDb('logout clears token cookie', async () => {
+  it('logout clears token cookie', async () => {
     const loginRes = await signIn('admin@acme-p1.com');
     const logoutRes = await app.inject({
       method: 'POST',
@@ -173,7 +161,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(logoutRes.statusCode).toBe(200);
   });
 
-  skipIfNoDb('verify-company with matching domain → verified', async () => {
+  it('verify-company with matching domain → verified', async () => {
     const company = await prisma.company.findFirst({ where: { domain: 'newcop1.test' } });
     expect(company).not.toBeNull();
     const tok = await prisma.companyVerificationToken.findFirst({ where: { companyId: company!.id } });
@@ -187,7 +175,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(JSON.parse(res.body)).toEqual({ verified: true });
   });
 
-  skipIfNoDb('student register creates pending student', async () => {
+  it('student register creates pending student', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/students/register',
@@ -201,7 +189,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(body.status).toBe('pending');
   });
 
-  skipIfNoDb('officer approves own-college student → 200 + audit', async () => {
+  it('officer approves own-college student → 200 + audit', async () => {
     const stu = await prisma.student.findFirst({ where: { collegeEmail: 's1@tech-p1.edu' } });
     expect(stu).not.toBeNull();
 
@@ -213,7 +201,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(updated!.status).toBe('verified');
   });
 
-  skipIfNoDb('GET /api/tests returns eligible tests for student', async () => {
+  it('GET /api/tests returns eligible tests for student', async () => {
     const s2 = await signIn('s2@state-p1.edu');
     const res = await injectWithCookies('GET', '/api/tests', null, s2.cookieObj);
     expect(res.statusCode).toBe(200);
@@ -221,7 +209,7 @@ describe('[INTEGRATION] New Phase 1 Routes — real Postgres', () => {
     expect(body.length).toBeGreaterThan(0);
   });
 
-  skipIfNoDb('POST /api/tests creates draft test when verified', async () => {
+  it('POST /api/tests creates draft test when verified', async () => {
     const admin = await signIn('boss@globex-p1.com');
     const q = await prisma.question.findFirst();
     const res = await injectWithCookies('POST', '/api/tests', {

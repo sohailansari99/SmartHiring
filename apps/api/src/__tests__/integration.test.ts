@@ -1,45 +1,27 @@
 // Integration tests against a real Postgres database.
-// Requires DATABASE_URL in .env to point to a test-capable database.
-// Run: pnpm prisma migrate dev --name init   (once, after DATABASE_URL is set)
-//       pnpm test                               (runs unit + integration)
-//
-// If DATABASE_URL is not reachable, this entire suite is skipped with a note.
+// Requires DATABASE_URL_TEST to point to a reachable PostgreSQL instance on localhost.
+// Fail fast if missing or unreachable — do not silently skip.
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { createApp } from '../server.js';
 
-// ─── Try to connect; skip entire suite if DB is unreachable ──────────────────
-const testDbUrl = process.env.DATABASE_URL_TEST || 'postgresql://signal:password@127.0.0.1:5433/signal_test';
-const prisma = new PrismaClient({ datasources: { db: { url: testDbUrl } } });
+const rawUrl = process.env.DATABASE_URL_TEST;
+if (!rawUrl) throw new Error('[INTEGRATION] DATABASE_URL_TEST environment variable is required');
+if (!rawUrl.includes('127.0.0.1') && !rawUrl.includes('localhost')) throw new Error('[INTEGRATION] DATABASE_URL_TEST must point to a local PostgreSQL instance');
+
+const prisma = new PrismaClient({ datasources: { db: { url: rawUrl } } });
 const app = createApp(prisma);
 
-async function canConnect(): Promise<boolean> {
-  try {
-    await prisma.$connect();
-    await prisma.$disconnect();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const dbAvailable = await canConnect();
-
-if (!dbAvailable) {
-  console.warn(
-    '[INTEGRATION] SKIP — DATABASE_URL_TEST is not reachable. ' +
-    'Set a valid PostgreSQL connection string in apps/api/.env or via DATABASE_URL_TEST environment variable.'
-  );
+try {
+  await prisma.$connect();
+} catch (err) {
+  console.error('[INTEGRATION] DATABASE_URL_TEST is reachable but cannot connect:', err);
+  process.exit(1);
 }
 
 describe('[INTEGRATION] API Access Rules — real Postgres', () => {
-  // Skip all tests when DB is unavailable
-  const originalIt = it;
-  const skipIfNoDb = (name: string, fn: (...args: any[]) => any, timeout?: number) =>
-    dbAvailable ? originalIt(name, fn, timeout) : originalIt.skip(name, fn, timeout);
-
   // ─── Helpers ──────────────────────────────────────────────────────────────
   async function seed() {
     // Clean slate
@@ -119,35 +101,33 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
   beforeAll(async () => {
-    if (!dbAvailable) return;
     await seed();
   });
 
   afterAll(async () => {
-    if (!dbAvailable) return;
     await prisma.$disconnect();
   });
 
   // ── 1. Anonymous → 401 ─────────────────────────────────────────────────────
-  skipIfNoDb('GET /api/tests/:testId without token → 401', async () => {
+  it('GET /api/tests/:testId without token → 401', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/tests/nonexistent' });
     expect(res.statusCode).toBe(401);
   });
 
-  skipIfNoDb('POST /api/students/:id/approve without token → 401', async () => {
+  it('POST /api/students/:id/approve without token → 401', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/students/s1/approve' });
     expect(res.statusCode).toBe(401);
   });
 
   // ── 2. Wrong role → 403 ────────────────────────────────────────────────────
-  skipIfNoDb('company_admin calling /students/:id/approve → 403', async () => {
+  it('company_admin calling /students/:id/approve → 403', async () => {
     const token = createToken({ id: 'dummy', email: 'admin@acme.test', role: 'company_admin', name: 'Admin' });
     const res = await injectWithToken(token, 'POST', '/api/students/some-id/approve');
     expect(res.statusCode).toBe(403);
   });
 
   // ── 3. Ineligible student → 404 ────────────────────────────────────────────
-  skipIfNoDb('pending student → 404', async () => {
+  it('pending student → 404', async () => {
     const pendingUser = await prisma.user.findFirst({ where: { email: 'pending@tech.edu' } });
     expect(pendingUser).not.toBeNull();
     const t = createToken({ id: pendingUser!.id, email: 'pending@tech.edu', role: 'student', name: 'Pending' });
@@ -156,7 +136,7 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  skipIfNoDb('student below min CGPA → 404', async () => {
+  it('student below min CGPA → 404', async () => {
     const badUser = await prisma.user.findFirst({ where: { email: 'bad@tech.edu' } });
     expect(badUser).not.toBeNull();
     const t = createToken({ id: badUser!.id, email: 'bad@tech.edu', role: 'student', name: 'Bad' });
@@ -166,7 +146,7 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
   });
 
   // ── 4. Eligible student → 200 ──────────────────────────────────────────────
-  skipIfNoDb('verified eligible student → 200 with test data', async () => {
+  it('verified eligible student → 200 with test data', async () => {
     const goodUser = await prisma.user.findFirst({ where: { email: 'good@tech.edu' } });
     expect(goodUser).not.toBeNull();
     const t = createToken({ id: goodUser!.id, email: 'good@tech.edu', role: 'student', name: 'Good' });
@@ -179,7 +159,7 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
   });
 
   // ── 5. Officer approves only own-college students ──────────────────────────
-  skipIfNoDb('officer approves student from same college → 200', async () => {
+  it('officer approves student from same college → 200', async () => {
     const officerUser = await prisma.user.findFirst({ where: { email: 'off@tech.edu' } });
     expect(officerUser).not.toBeNull();
     const t = createToken({ id: officerUser!.id, email: 'off@tech.edu', role: 'college_officer', name: 'Officer' });
@@ -198,7 +178,7 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
     expect(updated!.status).toBe('verified');
   });
 
-  skipIfNoDb('officer from different college → 403', async () => {
+  it('officer from different college → 403', async () => {
     const officerUser = await prisma.user.findFirst({ where: { email: 'off@tech.edu' } });
     expect(officerUser).not.toBeNull();
     const t = createToken({ id: officerUser!.id, email: 'off@tech.edu', role: 'college_officer', name: 'Officer' });
@@ -212,7 +192,7 @@ describe('[INTEGRATION] API Access Rules — real Postgres', () => {
   });
 
   // ── 6. Cross-company admin → 404 ───────────────────────────────────────────
-  skipIfNoDb('company_admin from another company → 404', async () => {
+  it('company_admin from another company → 404', async () => {
     const otherAdmin = await prisma.user.findFirst({ where: { email: 'admin@globex.test' } });
     expect(otherAdmin).not.toBeNull();
     const t = createToken({ id: otherAdmin!.id, email: 'admin@globex.test', role: 'company_admin', name: 'OtherAdmin' });
